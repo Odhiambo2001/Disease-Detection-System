@@ -1,0 +1,104 @@
+import os
+from torch.utils.data import Dataset
+from torchvision import transforms
+from PIL import Image
+import matplotlib.pyplot as plt
+import pandas as pd
+import numpy as np
+
+class CustomDataset(Dataset):
+    def __init__(self, root_folder, transform=None):
+        self.root_folder = root_folder
+        self.transform = transform
+        self.class_mapping = {'NonDemented': 0, 'VeryMildDemented': 1, 'MildDemented': 2, 'ModerateDemented': 3}
+        self.data = self.load_data()
+
+    def load_data(self):
+        data = []
+        for class_name in os.listdir(self.root_folder):
+            class_path = os.path.join(self.root_folder, class_name)
+            if os.path.isdir(class_path):
+                class_idx = self.class_mapping.get(class_name, -1)
+                if class_idx != -1:
+                    for file_name in os.listdir(class_path):
+                        file_path = os.path.join(class_path, file_name)
+                        data.append((file_path, class_idx))
+                else:
+                    print(f"Warning: Unknown class name '{class_name}' encountered.")
+        return data
+
+    def __len__(self):
+        return len(self.data)
+
+    def __getitem__(self, idx):
+        img_path, class_idx = self.data[idx]
+        img = Image.open(img_path).convert("RGB")
+
+        if self.transform:
+            img = self.transform(img)
+
+        return img, class_idx
+
+# Set the paths to the train and test folders
+train_folder = "/content/drive/MyDrive/Alzheimer Disease/archive (20)/Alzheimer_s Dataset/train"
+test_folder = "/content/drive/MyDrive/Alzheimer Disease/archive (20)/Alzheimer_s Dataset/test"
+
+# Define a transformation for your images
+transform = transforms.Compose([
+    transforms.Resize((224, 224)),
+    transforms.ToTensor(),
+])
+
+# Create custom datasets for train and test
+train_dataset = CustomDataset(train_folder, transform=transform)
+test_dataset = CustomDataset(test_folder, transform=transform)
+
+# Access class labels and counts for train and test
+train_labels = [i for _, i in train_dataset.data]
+test_labels = [i for _, i in test_dataset.data]
+
+df_train = pd.DataFrame(train_labels, columns=['label'])
+df_test = pd.DataFrame(test_labels, columns=['label'])
+
+# Define a custom color mapping for each class
+color_mapping = {0: 'blue', 1: 'green', 2: 'orange', 3: 'red'}
+
+# Plot individual bar plots for each class
+plt.figure(figsize=(15, 8))
+
+class_names = ['NonDemented', 'VeryMildDemented', 'MildDemented', 'ModerateDemented']
+
+for class_idx, class_name in enumerate(class_names):
+    class_count = df_train[df_train['label'] == class_idx].shape[0] + df_test[df_test['label'] == class_idx].shape[0]
+    plt.bar(class_name, class_count, color=color_mapping[class_idx], label=f'Class {class_idx}')
+
+plt.xlabel("Class", fontsize=20)
+plt.ylabel("Count", fontsize=20)
+plt.title("The number of samples for each class (Train and Test)", fontsize=20)
+plt.legend()
+plt.grid(True)
+plt.show()
+
+# Print the number of samples for each class in the training dataset
+for class_idx, class_name in enumerate(class_names):
+    class_count_train = df_train[df_train['label'] == class_idx].shape[0]
+    print(f"Class {class_name} in the training dataset: {class_count_train} samples")
+
+# Plot random images with labels from various classes
+plt.figure(figsize=(15, 8))
+
+for class_idx in range(len(class_names)):
+    class_indices = np.where(np.array(train_labels) == class_idx)[0]
+    
+    if len(class_indices) >= 5:
+        class_indices = np.random.choice(class_indices, size=5, replace=False)
+        
+        for n, i in enumerate(class_indices):
+            img, label = train_dataset[i]
+            img = img.permute(1, 2, 0).numpy()  # Convert from PyTorch tensor to NumPy array
+            plt.subplot(4, 5, class_idx * 5 + n + 1)
+            plt.imshow(img)
+            plt.axis('off')
+            plt.title(class_names[label], fontsize=12)
+
+plt.show()
