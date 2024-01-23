@@ -5,7 +5,13 @@ from PIL import Image
 import matplotlib.pyplot as plt
 import pandas as pd
 import numpy as np
+import africastalking
+import tensorflow as tf
+import cv2
+from tensorflow.keras.utils import image_dataset_from_directory
+from tensorflow.keras import layers
 
+# Define the CustomDataset class
 class CustomDataset(Dataset):
     def __init__(self, root_folder, transform=None):
         self.root_folder = root_folder
@@ -22,7 +28,12 @@ class CustomDataset(Dataset):
                 if class_idx != -1:
                     for file_name in os.listdir(class_path):
                         file_path = os.path.join(class_path, file_name)
-                        data.append((file_path, class_idx))
+
+                        # Check if the item is a file before processing
+                        if os.path.isfile(file_path):
+                            data.append((file_path, class_idx))
+                        else:
+                            print(f"Warning: Skipping non-file '{file_path}'.")
                 else:
                     print(f"Warning: Unknown class name '{class_name}' encountered.")
         return data
@@ -39,9 +50,15 @@ class CustomDataset(Dataset):
 
         return img, class_idx
 
+# Initialize Africa's Talking API
+username = "Victor2020"
+api_key = "c780fb8f88f578ae16abeee12546a0ea5ea35162ad06d27d770348f64dd3889e"
+africastalking.initialize(username, api_key)
+sms = africastalking.SMS
+
 # Set the paths to the train and test folders
-train_folder = "/content/drive/MyDrive/Alzheimer Disease/archive (20)/Alzheimer_s Dataset/train"
-test_folder = "/content/drive/MyDrive/Alzheimer Disease/archive (20)/Alzheimer_s Dataset/test"
+train_folder = "C:/Users/Administrator/Desktop/Alzheimer Disease/archive (20)/Alzheimer_s Dataset/train"
+test_folder = "C:/Users/Administrator/Desktop/Alzheimer Disease/archive (20)/Alzheimer_s Dataset/test"
 
 # Define a transformation for your images
 transform = transforms.Compose([
@@ -79,20 +96,15 @@ plt.legend()
 plt.grid(True)
 plt.show()
 
-# Print the number of samples for each class in the training dataset
-for class_idx, class_name in enumerate(class_names):
-    class_count_train = df_train[df_train['label'] == class_idx].shape[0]
-    print(f"Class {class_name} in the training dataset: {class_count_train} samples")
-
 # Plot random images with labels from various classes
 plt.figure(figsize=(15, 8))
 
 for class_idx in range(len(class_names)):
     class_indices = np.where(np.array(train_labels) == class_idx)[0]
-    
+
     if len(class_indices) >= 5:
         class_indices = np.random.choice(class_indices, size=5, replace=False)
-        
+
         for n, i in enumerate(class_indices):
             img, label = train_dataset[i]
             img = img.permute(1, 2, 0).numpy()  # Convert from PyTorch tensor to NumPy array
@@ -102,3 +114,185 @@ for class_idx in range(len(class_names)):
             plt.title(class_names[label], fontsize=12)
 
 plt.show()
+
+# Split the dataset
+batch_size = 32
+img_height = 224
+img_width = 224
+train_data = image_dataset_from_directory(train_folder, validation_split=0.2, subset="training", seed=123,
+                                          image_size=(img_height, img_width), batch_size=batch_size)
+val_data = image_dataset_from_directory(train_folder, validation_split=0.2, subset="validation", seed=123,
+                                        image_size=(img_height, img_width), batch_size=batch_size)
+
+model = tf.keras.Sequential([
+    layers.Rescaling(1./255, input_shape=(img_height, img_width, 3)),
+    layers.Conv2D(16, 3, padding='same', activation='relu'),
+    layers.MaxPooling2D(),
+    layers.Conv2D(32, 3, padding='same', activation='relu'),
+    layers.MaxPooling2D(),
+    layers.Conv2D(64, 3, padding='same', activation='relu'),
+    layers.MaxPooling2D(),
+    layers.Dropout(0.5),
+    layers.Flatten(),
+    layers.Dense(128, activation='relu'),
+    layers.Dense(4, activation="softmax")
+])
+
+# Function to visualize intermediate feature maps
+def visualize_feature_maps(model, img_path):
+    img = Image.open(img_path).convert("RGB")
+    img = transform(img).unsqueeze(0)
+    
+    # Transpose the PyTorch tensor to match TensorFlow's channel order
+    img = img.permute(0, 2, 3, 1)
+
+    # Convert PyTorch tensor to NumPy array
+    img_np = img.numpy()
+
+    # Extract feature maps from intermediate layers
+    intermediate_layers = [layer.output for layer in model.layers[:-1]]  # Exclude the output layer
+    feature_map_model = tf.keras.Model(inputs=model.input, outputs=intermediate_layers)
+    feature_maps = feature_map_model.predict(img_np)
+
+    # Visualize feature maps
+    layer_names = [layer.name for layer in model.layers[:-1]]  # Exclude the output layer
+    for layer_name, feature_map in zip(layer_names, feature_maps):
+        plt.figure(figsize=(8, 8))
+        for i in range(min(64, feature_map.shape[-1])):  # Limit to 64 feature maps for visualization
+            plt.subplot(8, 8, i + 1)
+            if len(feature_map.shape) == 4:  # Check if feature_map is 4-dimensional
+                plt.imshow(feature_map[0, :, :, i], cmap='viridis')
+            elif len(feature_map.shape) == 3:  # Check if feature_map is 3-dimensional
+                plt.imshow(feature_map[:, :, i], cmap='viridis')
+            plt.axis('off')
+        plt.suptitle(f'Layer: {layer_name}')
+        plt.show()
+
+# Choose an image path for feature map visualization
+sample_img_path = "C:/Users/Administrator/Desktop/Alzheimer Disease/archive (20)/Alzheimer_s Dataset/train/ModerateDemented/moderateDem25.jpg"
+visualize_feature_maps(model, sample_img_path)
+
+# Compile the model
+model.compile(optimizer="Adam", loss=tf.keras.losses.SparseCategoricalCrossentropy(), metrics=["accuracy"])
+
+# Fit the model
+epochs = 10
+history = model.fit(train_data, epochs=epochs, validation_data=val_data, batch_size=batch_size)
+acc = history.history['accuracy']
+val_acc = history.history['val_accuracy']
+loss = history.history['loss']
+val_loss = history.history['val_loss']
+
+epochs_range = range(epochs)
+
+plt.figure(figsize=(8, 8))
+plt.subplot(1, 2, 1)
+plt.plot(epochs_range, acc, label='Accuracy')
+plt.plot(epochs_range, val_acc, label="Validation Accuracy")
+plt.legend()
+
+plt.subplot(1, 2, 2)
+plt.plot(epochs_range, loss, label='Loss')
+plt.plot(epochs_range, val_loss, label="Validation Loss")
+plt.legend()
+plt.show()
+
+plt.figure(figsize=(20, 20))
+class_names = val_data.class_names
+result = ' | False'
+for images, labels in val_data.take(1):
+    for i in range(25):
+        ax = plt.subplot(5, 5, i + 1)
+        img = images[i].numpy().astype("uint8")
+        img = tf.expand_dims(img, axis=0)
+        predictions = model.predict(img)
+        predicted_class = np.argmax(predictions)
+        if class_names[predicted_class] == class_names[labels[i]]:
+            result = ' | TRUE'
+        plt.imshow(images[i].numpy().astype("uint8"))
+        plt.title(class_names[predicted_class] + result)
+        plt.axis("off")
+
+# Evaluate the model on the validation dataset
+val_loss, val_accuracy = model.evaluate(val_data)
+
+# Print the overall accuracy
+overall_accuracy = val_accuracy
+print(f"Overall Accuracy on Validation Dataset: {val_accuracy}")
+
+# Print the number of samples for each class in the training dataset
+for class_idx, class_name in enumerate(class_names):
+    class_count_train = df_train[df_train['label'] == class_idx].shape[0]
+    print(f"Class {class_name} in the training dataset: {class_count_train} samples")
+
+# Generate a report on the number of samples for each class and include the overall accuracy
+report_message = "Class-wise sample count report:\n"
+for class_idx, class_name in enumerate(class_names):
+    class_count_train = df_train[df_train['label'] == class_idx].shape[0]
+    class_count_test = df_test[df_test['label'] == class_idx].shape[0]
+    report_message += f"Class {class_name}: Train={class_count_train}, Test={class_count_test}\n"
+
+# Include the overall accuracy in the report message
+report_message += f"\nOverall Accuracy on Validation Dataset: {overall_accuracy}"
+
+# Print and send the combined report using Africastalking SMS
+print(report_message)
+
+# Replace the following placeholders with your actual phone number and sender ID
+recipient_phone_numbers = ["+254712140013"]
+
+# Convert the list of phone numbers to a comma-separated string
+recipient_phone_numbers_str = ",".join(recipient_phone_numbers)
+
+print("Recipient Phone Numbers:", recipient_phone_numbers_str)
+
+# Send the report via SMS
+try:
+    response = sms.send(report_message, [recipient_phone_numbers_str])
+    print(f"SMS Sent: {response}")
+except Exception as e:
+    print(f"Error sending SMS: {e}")
+
+# Prompt the user for a custom image dataset path
+user_dataset_path = input("Enter the path to the custom Alzheimer's image dataset:")
+
+# Remove double quotes from the entered path
+user_dataset_path = user_dataset_path.strip('\"')
+
+# Create a custom dataset for user-provided images
+user_dataset = CustomDataset(user_dataset_path, transform=transform)
+
+# Make predictions for user-provided images
+predictions = []
+for idx in range(len(user_dataset)):
+    img, _ = user_dataset[idx]
+    img = img.unsqueeze(0)  # Add batch dimension
+    img = img.numpy() * 255  # Convert to Numpy and scale to [0,255] for the Rescaling layer
+    predictions.append(np.argmax(model.predict(img)))
+
+# Determine if the images are related to Alzheimer's disease
+alzheimer_related = any(prediction != 0 for prediction in predictions)
+
+# Create a message with the predictions
+prediction_message = "Predictions for user-provided dataset\n"
+for idx, prediction in enumerate(predictions):
+    prediction_message += f"Image {idx + 1}: Class {prediction}\n"
+prediction_message += f"\nIs the dataset related to Alzheimer's disease? {'Yes' if alzheimer_related else 'No'}"
+
+# Print and send the prediction message using Africastalking SMS
+print(prediction_message)
+
+# Replace the following placeholders with your actual phone number and sender ID
+recipient_phone_numbers = ["+254712140013"]
+
+# Convert the list of phone numbers to a comma-separated string
+recipient_phone_numbers_str = ",".join(recipient_phone_numbers)
+
+print("Recipient Phone Numbers:", recipient_phone_numbers_str)
+
+# Send the prediction message via SMS
+try:
+    response = sms.send(prediction_message, [recipient_phone_numbers_str])
+    print(f"SMS Sent: {response}")
+except Exception as e:
+    print(f"Error sending SMS: {e}")
